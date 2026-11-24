@@ -1,0 +1,96 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Meridian Policy and Claims API",
+    "description": "Internal system of record for Meridian Mutual policies and claims. Returns personal data.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "http://meridian-api:8080" }
+  ],
+  "paths": {
+    "/policies/{policy_id}": {
+      "get": {
+        "operationId": "getPolicy",
+        "summary": "Look up a policy",
+        "description": "Returns the policy holder, product, status, cover limit, excess and renewal date for a policy number such as POL-20418.",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "description": "Policy number, for example POL-20418",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The policy",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Policy" } } }
+          },
+          "404": { "description": "Policy not found" }
+        },
+        "security": [ { "ApiKeyAuth": [] } ]
+      }
+    },
+    "/claims/{claim_id}": {
+      "get": {
+        "operationId": "getClaim",
+        "summary": "Look up a claim",
+        "description": "Returns the status, reserve, handler and next action for a claim number such as CLM-77120.",
+        "parameters": [
+          {
+            "name": "claim_id",
+            "in": "path",
+            "required": true,
+            "description": "Claim number, for example CLM-77120",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The claim",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Claim" } } }
+          },
+          "404": { "description": "Claim not found" }
+        },
+        "security": [ { "ApiKeyAuth": [] } ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": { "type": "apiKey", "in": "header", "name": "X-API-Key" }
+    },
+    "schemas": {
+      "Policy": {
+        "type": "object",
+        "properties": {
+          "policy_id": { "type": "string" },
+          "product": { "type": "string" },
+          "holder": { "type": "string" },
+          "date_of_birth": { "type": "string" },
+          "status": { "type": "string" },
+          "cover_limit": { "type": "string" },
+          "excess": { "type": "string" },
+          "renewal_date": { "type": "string" },
+          "bank_account": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      },
+      "Claim": {
+        "type": "object",
+        "properties": {
+          "claim_id": { "type": "string" },
+          "policy_id": { "type": "string" },
+          "type": { "type": "string" },
+          "status": { "type": "string" },
+          "reserve": { "type": "string" },
+          "handler": { "type": "string" },
+          "opened": { "type": "string" },
+          "next_action": { "type": "string" }
+        }
+      }
+    }
+  }
+}

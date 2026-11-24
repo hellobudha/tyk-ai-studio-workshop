@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Tyk AI Studio workshop: one entry point for everything.
+#
+#   ./workshop up          start the stack and prepare Monday morning at Meridian Mutual
+#   ./workshop who         sign-in details for every person in the story
+#   ./workshop act <n>     do Act n for you through the API (catch-up, or to rehearse)
+#   ./workshop check <n>   verify Act n is in place
+#   ./workshop goto <n>    make sure Acts 1..n are all done
+#   ./workshop status      what is running and what state the story is in
+#   ./workshop ask <app> <model> "<prompt>"   send one request through a gateway as an App
+#   ./workshop sim ...     look at / control the simulated LLM providers
+#   ./workshop logs <svc>  container logs (studio, edge-london, edge-frankfurt, llm-sim, ...)
+#   ./workshop down        stop the stack (keeps data)
+#   ./workshop reset       stop and delete all workshop data, back to a clean slate
+set -euo pipefail
+cd "$(dirname "$0")"
+ROOT="$(pwd)"
+
+ensure_env() {
+  if [ ! -f .env ]; then
+    cp .env.example .env
+    echo "Created .env from .env.example."
+  fi
+  # Fill in any blank generated secret.
+  gen() { # gen KEY VALUE
+    if ! grep -q "^$1=..*" .env; then
+      if grep -q "^$1=" .env; then
+        tmp="$(mktemp)"; awk -v k="$1" -v v="$2" 'BEGIN{FS=OFS="="} $1==k{print k"="v; next} {print}' .env > "$tmp" && mv "$tmp" .env
+      else
+        printf '%s=%s\n' "$1" "$2" >> .env
+      fi
+    fi
+  }
+  command -v openssl >/dev/null 2>&1 || { echo "openssl is required"; exit 1; }
+  gen WS_SECRET_KEY        "$(openssl rand -hex 24)"
+  gen WS_ENCRYPTION_KEY    "$(openssl rand -hex 16)"   # must be exactly 32 characters
+  gen WS_GRPC_TOKEN        "$(openssl rand -hex 24)"
+  gen WS_JWT_SECRET        "$(openssl rand -hex 24)"
+  gen WS_POSTGRES_PASSWORD "$(openssl rand -hex 16)"
+  gen WS_MERIDIAN_API_KEY  "mrd-$(openssl rand -hex 12)"
+  gen WS_ADMIN_PASSWORD    "Priya-$(openssl rand -hex 4)-2026!"
+  gen WS_USER_PASSWORD     "Meridian-$(openssl rand -hex 3)-2026!"
+  if ! grep -q '^TYK_AI_LICENSE=..*' .env; then
+    echo
+    echo "  TYK_AI_LICENSE is empty in .env."
+    echo "  Paste your Tyk AI Studio Enterprise licence there, then run ./workshop up again."
+    echo "  (No licence? Ask your Tyk account team or https://tyk.io/contact/)"
+    exit 1
+  fi
+}
+
+cmd="${1:-help}"; shift || true
+
+case "$cmd" in
+  up)
+    for b in docker curl jq; do command -v "$b" >/dev/null 2>&1 || { echo "'$b' is required but not installed"; exit 1; }; done
+    ensure_env
+    docker compose up -d
+    . scripts/lib.sh
+    printf 'Waiting for AI Studio to start'
+    for _ in $(seq 1 120); do curl -sf -o /dev/null "$STUDIO_URL/health" && break; printf '.'; sleep 1; done; echo
+    if ! curl -sf -o /dev/null "$STUDIO_URL/health"; then
+      echo "AI Studio did not start. Last log lines:"; docker compose logs --tail 15 studio
+      echo; echo "A licence problem shows up here as 'license validation failed'."; exit 1
+    fi
+    ./scripts/seed.sh
+    ;;
+  seed)   ./scripts/seed.sh ;;
+  who)    ./scripts/who.sh ;;
+  status) ./scripts/status.sh ;;
+  act)
+    n="${1:-}"; [ -f "scripts/acts/act$n.sh" ] || { echo "usage: ./workshop act <0-7>"; exit 1; }
+    shift; "scripts/acts/act$n.sh" "$@"
+    ;;
+  check)
+    ./scripts/check.sh "${1:-}"
+    ;;
+  goto)
+    n="${1:-}"; case "$n" in [1-7]) ;; *) echo "usage: ./workshop goto <1-7>"; exit 1;; esac
+    for i in $(seq 1 "$n"); do "scripts/acts/act$i.sh"; done
+    echo; echo "Acts 1 to $n are in place."
+    ;;
+  sim)    ./scripts/sim.sh "$@" ;;
+  ask)    ./scripts/ask.sh "$@" ;;
+  runaway) ./scripts/runaway.sh ;;
+  mcp)    ./scripts/mcp.sh "$@" ;;
+  logs)   docker compose logs --tail "${TAIL:-80}" "$@" ;;
+  down)   docker compose down ;;
+  reset)
+    docker compose down -v --remove-orphans
+    rm -rf .state
+    echo "Workshop data deleted. ./workshop up starts again from Monday morning."
+    ;;
+  help|-h|--help|*)
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+esac

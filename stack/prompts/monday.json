@@ -1,0 +1,9 @@
+{
+  "model": "gpt-5.5",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Summarise this claim for the file. Customer Amara Osei, date of birth 14/03/1987, National Insurance number AB 12 34 56 C, email amara.osei@example.com. Refund to IBAN GB29 NWBK 6016 1331 9268 19. Escape of water in the kitchen, policy POL-20418."
+    }
+  ]
+}

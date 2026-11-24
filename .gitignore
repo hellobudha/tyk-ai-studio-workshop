@@ -1,0 +1,10 @@
+# Secrets and local state: never commit these.
+.env
+.state/
+*.local
+# Video working files. The finished video is committed as video/tyk-ai-studio-workshop-demo.mp4
+video/work/
+video/node_modules/
+video/out/
+node_modules/
+.DS_Store

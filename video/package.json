@@ -1,0 +1,1 @@
+{"name":"workshop-video","private":true,"description":"Dev dependency for recording the demo video only.","devDependencies":{"playwright":"^1.65.1"}}

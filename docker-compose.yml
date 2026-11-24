@@ -1,0 +1,170 @@
+# Tyk AI Studio workshop stack. Self-contained: its own project name, network,
+# volumes and ports, so it never touches another AI Studio on this machine.
+#
+#   studio          AI Studio Enterprise: the control plane (admin console, AI Portal,
+#                   chat, management API) with its embedded gateway
+#   edge-london     Edge gateway (data plane), namespace "uk"
+#   edge-frankfurt  Edge gateway (data plane), namespace "eu"
+#   postgres        AI Studio's database (with pgvector for the Act 5 knowledge base)
+#   llm-sim         Simulated LLM providers (NOT part of Tyk: stands in for the vendors)
+#   meridian-api    Meridian Mutual's internal Policy & Claims API (NOT part of Tyk)
+#
+# LOCAL USE ONLY: plaintext hub-edge link, ports bound to 127.0.0.1, throwaway
+# admin account. Do not use this file as a deployment template.
+name: tyk-ai-studio-workshop
+
+x-edge: &edge
+  image: ${MICROGATEWAY_IMAGE}
+  restart: unless-stopped
+  # The Tyk images are distroless (no shell, no wget), so there is no in-container
+  # healthcheck. ./workshop up waits for readiness from the host instead, and an
+  # edge that starts before the control plane simply retries.
+  depends_on:
+    - studio
+  volumes:
+    - ./stack/edge/analytics-pulse.yaml:/workshop/analytics-pulse.yaml:ro
+
+x-edge-env: &edge-env
+  GATEWAY_MODE: edge
+  PORT: "8080"
+  HOST: 0.0.0.0
+  DATABASE_TYPE: sqlite
+  DATABASE_DSN: file:/tmp/edge.db?mode=rwc
+  CONTROL_ENDPOINT: studio:50051
+  EDGE_AUTH_TOKEN: ${WS_GRPC_TOKEN}
+  EDGE_TLS_ENABLED: "false"
+  EDGE_ALLOW_INSECURE: "true"
+  EDGE_HEARTBEAT_INTERVAL: 5s
+  EDGE_RECONNECT_INTERVAL: 5s
+  ENCRYPTION_KEY: ${WS_ENCRYPTION_KEY}
+  JWT_SECRET: ${WS_JWT_SECRET}
+  TYK_AI_LICENSE: ${TYK_AI_LICENSE}
+  ALLOW_INTERNAL_NETWORK_ACCESS: "true"
+  ANALYTICS_ENABLED: "true"
+  ANALYTICS_STORE_REQUESTS: "true"
+  ANALYTICS_STORE_RESPONSES: "true"
+  ANALYTICS_MAX_BODY_SIZE: "8192"
+  GATEWAY_ENABLE_FILTERS: "true"
+  GATEWAY_ENABLE_ANALYTICS: "true"
+  PLUGINS_CONFIG_PATH: /workshop/analytics-pulse.yaml
+  LOG_LEVEL: info
+  LICENSE_DISABLE_TELEMETRY: "true"
+
+services:
+  postgres:
+    # Postgres with the pgvector extension: AI Studio's database, plus a second
+    # database that holds the claims handbook's vector index in Act 5.
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: studio
+      POSTGRES_PASSWORD: ${WS_POSTGRES_PASSWORD}
+      POSTGRES_DB: studio
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./stack/postgres/01-vectors.sql:/docker-entrypoint-initdb.d/01-vectors.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studio"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # AI Studio runs as an unprivileged user (65532); a fresh named volume is owned
+  # by root. This one-shot container hands the data volume over before it starts.
+  studio-init:
+    image: node:22-alpine
+    command: ["chown", "-R", "65532:65532", "/data"]
+    volumes:
+      - studiodata:/data
+
+  studio:
+    image: ${STUDIO_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      studio-init:
+        condition: service_completed_successfully
+    environment:
+      TYK_AI_LICENSE: ${TYK_AI_LICENSE}
+      DATABASE_TYPE: postgres
+      DATABASE_URL: postgres://studio:${WS_POSTGRES_PASSWORD}@postgres:5432/studio?sslmode=disable
+      TYK_AI_SECRET_KEY: ${WS_SECRET_KEY}
+      # Must equal the edges' ENCRYPTION_KEY: AI Studio encrypts vendor keys with it for them.
+      MICROGATEWAY_ENCRYPTION_KEY: ${WS_ENCRYPTION_KEY}
+      GATEWAY_MODE: control
+      GRPC_PORT: "50051"
+      GRPC_HOST: 0.0.0.0
+      GRPC_TLS_INSECURE: "true"
+      GRPC_AUTH_TOKEN: ${WS_GRPC_TOKEN}
+      # Open only so the first admin can be created by ./workshop seed.
+      ALLOW_REGISTRATIONS: "true"
+      SITE_URL: http://localhost:${STUDIO_PORT}
+      PROXY_URL: http://localhost:${STUDIO_GATEWAY_PORT}
+      TOOL_DISPLAY_URL: http://localhost:${STUDIO_GATEWAY_PORT}
+      DATASOURCE_DISPLAY_URL: http://localhost:${STUDIO_GATEWAY_PORT}
+      FROM_EMAIL: noreply@meridian-mutual.example
+      DEFAULT_SIGNUP_MODE: both
+      # llm-sim and meridian-api live on the compose network (private addresses).
+      ALLOW_INTERNAL_NETWORK_ACCESS: "true"
+      LICENSE_DISABLE_TELEMETRY: "true"
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:${STUDIO_PORT}:8080"
+      - "127.0.0.1:${STUDIO_GATEWAY_PORT}:9090"
+    volumes:
+      - studiodata:/opt/tyk-ai-studio/data
+
+  edge-london:
+    <<: *edge
+    environment:
+      <<: *edge-env
+      EDGE_ID: edge-london
+      EDGE_NAMESPACE: uk
+    ports:
+      - "127.0.0.1:${EDGE_LONDON_PORT}:8080"
+
+  edge-frankfurt:
+    <<: *edge
+    environment:
+      <<: *edge-env
+      EDGE_ID: edge-frankfurt
+      EDGE_NAMESPACE: eu
+    ports:
+      - "127.0.0.1:${EDGE_FRANKFURT_PORT}:8080"
+
+  llm-sim:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "server.js"]
+    volumes:
+      - ./stack/llm-sim:/app:ro
+    ports:
+      - "127.0.0.1:${LLM_SIM_PORT}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/_sim/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  meridian-api:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "server.js"]
+    environment:
+      MERIDIAN_API_KEY: ${WS_MERIDIAN_API_KEY}
+    volumes:
+      - ./stack/meridian-api:/app:ro
+    ports:
+      - "127.0.0.1:${MERIDIAN_API_PORT}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
+  studiodata:

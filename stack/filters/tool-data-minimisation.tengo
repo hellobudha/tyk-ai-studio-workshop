@@ -1,0 +1,39 @@
+// Meridian rule: a model sees only the policy fields it needs.
+// The Policy & Claims API returns the customer's bank account and date of birth.
+// No assistant needs those to answer "is this policy in force?", so this filter
+// removes them from the tool's answer before a model or an agent ever sees it.
+//
+// Attached to a TOOL as a response filter, so `input.raw_input` is the tool's reply.
+json := import("json")
+
+withheld := ["bank_account", "date_of_birth"]
+removed := []
+payload := input.raw_input
+
+record := json.decode(input.raw_input)
+if is_map(record) {
+    for field in withheld {
+        if record[field] != undefined {
+            record[field] = "[withheld by policy]"
+            removed = append(removed, field)
+        }
+    }
+    payload = string(json.encode(record))
+}
+
+events := []
+if len(removed) > 0 {
+    events = [{
+        event_type: "meridian.tool_fields_withheld",
+        severity: "info",
+        description: "Fields withheld from a tool result before the model saw them",
+        metadata: { "fields": removed }
+    }]
+}
+
+output := {
+    block: false,
+    payload: payload,
+    message: "",
+    compliance_events: events
+}

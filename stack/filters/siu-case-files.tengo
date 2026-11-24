@@ -1,0 +1,34 @@
+// Meridian rule: Special Investigations Unit (SIU) case files never leave Meridian.
+// Fraud investigation notes are legally privileged. The built-in pattern library
+// cannot know what an SIU reference looks like, so this rule is written by hand.
+//
+// A filter script reads `input` and sets `output`.
+text := import("text")
+
+found := ""
+for msg in input.messages {
+    if msg.role == "user" || msg.role == "system" {
+        refs := text.re_find("SIU-[0-9]{5}", msg.content, 1)
+        if refs != undefined && len(refs) > 0 {
+            found = refs[0][0].text
+            break
+        }
+    }
+}
+
+events := []
+if found != "" {
+    events = [{
+        event_type: "meridian.siu_case_reference",
+        severity: "critical",
+        description: "A prompt referenced an SIU case file and was blocked",
+        metadata: { "reference": found }
+    }]
+}
+
+output := {
+    block: found != "",
+    payload: input.raw_input,
+    message: found != "" ? "SIU case files must not be sent to an AI model. Remove the reference " + found + " and try again." : "",
+    compliance_events: events
+}
